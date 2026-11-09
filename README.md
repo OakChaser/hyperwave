@@ -230,10 +230,11 @@ only way in on the display this panel exists for. If the status item has been
 crowded under the notch, "click the status item" is not an available answer.
 
 By default the tab retracts when nothing is playing, so the notch looks stock on
-a quiet machine. The window stays alive at exactly the housing's size — a
-physical cutout, so nothing shows — which keeps the notch hoverable. Hovering a
-retracted panel still opens it, so there is always a route to the menu even when
-the status item is invisible and nothing is making noise.
+a quiet machine. It slides back up into the housing with the strip fading out,
+and eases back down when sound returns. The window stays alive at exactly the
+housing's size — a physical cutout, so nothing shows — which keeps the notch
+hoverable. Hovering a retracted panel still opens it, so there is always a route
+to the menu even when the status item is invisible and nothing is making noise.
 
 ## Choosing a source
 

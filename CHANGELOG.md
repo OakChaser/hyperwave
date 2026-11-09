@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The notch tab retracts and returns with an animation.** When the music stops,
+  the tab now slides up into the housing over a third of a second while the
+  strip fades out, instead of the black area vanishing between one frame and
+  the next. Coming back does the reverse: the tab eases down and the picture
+  fades in under it.
+
 ## [0.3.0] - 2026-10-18
 
 A welcome window, Open at Login, and a microphone that works on a MacBook.

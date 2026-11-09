@@ -68,7 +68,9 @@ public:
     // notch looks stock when nothing is playing. The window stays alive and
     // hoverable so the panel is still reachable -- otherwise, on a display
     // crowded enough to hide the status item, there would be no way to open
-    // anything at all.
+    // anything at all. Both directions are animated: the strip fades as the
+    // tab slides back into the housing, rather than the black area blinking
+    // out of existence.
     void setTabVisible(bool visible) override;
     bool isTabVisible() const;
 
@@ -94,9 +96,10 @@ public:
     void showMenu();
 
 private:
-    // `animated` eases the window to its new size, for the hover expand and
-    // collapse. Off everywhere else: a display reconfiguration is a jump, not
-    // a movement, and easing it only makes it look uncertain.
+    // `animated` eases the window to its new size: the hover expand/collapse,
+    // and the tab sliding out of and back into the housing. Off everywhere
+    // else: a display reconfiguration is a jump, not a movement, and easing it
+    // only makes it look uncertain.
     void applyFrame(bool animated = false);
 
     // A poll, alive only while the panel is open, for the departure AppKit can

@@ -87,9 +87,66 @@ CGFloat expandedHeight(CGFloat notchHeight)
 constexpr NSTimeInterval kExpandSeconds = 0.22;
 constexpr NSTimeInterval kCollapseSeconds = 0.16;
 
+// The tab appearing and retracting. Slower than the hover collapse: this is
+// the panel going to sleep (or waking up), not getting out of the pointer's
+// way, and the eye should be able to follow it back into the housing.
+constexpr NSTimeInterval kTabRevealSeconds = 0.26;
+constexpr NSTimeInterval kTabRetractSeconds = 0.34;
+
 CAMediaTimingFunction *hoverCurve()
 {
     return [CAMediaTimingFunction functionWithControlPoints:0.2f:0.0f:0.0f:1.0f];
+}
+
+// Symmetrical, because a tab being pulled into the housing has no pointer to
+// hurry for. The hover curve's late weighting reads as a snap at this length.
+CAMediaTimingFunction *tabCurve()
+{
+    return [CAMediaTimingFunction functionWithControlPoints:0.4f:0.0f:0.2f:1.0f];
+}
+
+// Fades the strip in or out in step with the window's resize, so a retracting
+// tab takes its picture with it rather than the picture being switched off.
+//
+// The model opacity is set to the destination and the animation runs from the
+// layer's current presentation value, so a reveal that interrupts a retract
+// (the music coming back on) continues from wherever the fade had got to
+// instead of jumping to full opacity for a frame.
+void fadeStripLayer(CALayer *strip, bool visible, NSTimeInterval duration)
+{
+    if (!strip)
+        return;
+
+    if (duration <= 0.0) {
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        strip.hidden = !visible;
+        strip.opacity = visible ? 1.0f : 0.0f;
+        [CATransaction commit];
+        return;
+    }
+
+    CALayer *presentation = (CALayer *)strip.presentationLayer;
+    const float from = presentation ? presentation.opacity : strip.opacity;
+    const float to = visible ? 1.0f : 0.0f;
+
+    [strip removeAnimationForKey:@"tabFade"];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    // Unhidden for the whole fade, in both directions. A hidden layer has no
+    // pixels to animate, so hiding a retracting strip immediately would put it
+    // back to being switched off; an opacity of zero is what ends its life on
+    // screen, and it is invisible to a screen recording either way.
+    strip.hidden = NO;
+    strip.opacity = to;
+
+    CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue = @(from);
+    fade.toValue = @(to);
+    fade.duration = duration;
+    fade.timingFunction = tabCurve();
+    [strip addAnimation:fade forKey:@"tabFade"];
+    [CATransaction commit];
 }
 
 // How often the panel checks that the pointer is still on it while open. See
@@ -287,6 +344,10 @@ struct MacNotchPresenter::Impl
     NotchGeometry geometry;
     bool expanded = false;
     bool tabVisible = true;
+    // Whether the strip is meant to be showing, tracked separately from the
+    // layer's own opacity: present() runs every frame with actions disabled and
+    // an opacity animation in flight is not a reliable record of intent.
+    bool stripShown = true;
     int preferredFps = 60;
     bool clockRunning = false;
     // Runs only while the panel is open. See startHoverWatch().
@@ -505,10 +566,9 @@ void MacNotchPresenter::setExpanded(bool expanded)
     if (expanded == m_impl->expanded || !m_impl->window)
         return;
     m_impl->expanded = expanded;
-    // The one animated transition. Everything else that moves this window --
-    // the tab retracting, a display being reconfigured -- is either a state
-    // change nobody is looking at or a jump to somewhere else entirely, and
-    // easing those only makes them look uncertain.
+    // Animated, like the tab reveal and retract. A display being reconfigured
+    // is the one thing that stays a jump: it is somewhere else entirely, not a
+    // movement of this window.
     applyFrame(true);
 
     if (expanded)
@@ -636,11 +696,14 @@ void MacNotchPresenter::setTabVisible(bool visible)
     m_impl->tabVisible = visible;
 
     // Expanded wins: the panel must not retract out from under a pointer that
-    // is hovering it just because the music stopped.
+    // is hovering it just because the music stopped. The new value is kept, so
+    // the tab retracts when the pointer leaves.
     if (m_impl->expanded)
         return;
 
-    applyFrame();
+    // Animated: the tab slides back up into the housing with the strip fading
+    // out, rather than the black area blinking out of existence.
+    applyFrame(true);
 }
 
 bool MacNotchPresenter::isTabVisible() const
@@ -684,11 +747,39 @@ void MacNotchPresenter::applyFrame(bool animated)
     const NSRect frame = panelFrame(g, m_impl->expanded, m_impl->tabVisible);
 
     // Retracted, the window occupies exactly the housing, which is a physical
-    // cutout -- nothing drawn there reaches the panel. Hiding the strip anyway
-    // matters for two reasons: a screen recording DOES capture the notch
-    // region, and there is no point compositing bars nobody can see.
+    // cutout -- nothing drawn there reaches the panel. Taking the strip out of
+    // the picture anyway matters because a screen recording DOES capture the
+    // notch region: the retract fades it to zero opacity, and a state change
+    // with no animation to show it with hides the layer outright.
     const bool showStrip = m_impl->expanded || m_impl->tabVisible;
-    m_impl->view.stripLayer.hidden = !showStrip;
+    const bool stripChanged = showStrip != m_impl->stripShown;
+    m_impl->stripShown = showStrip;
+
+    // Which of the two animations this is: the hover expand/collapse, or the
+    // tab waking up and going back into the housing. A collapse out of an
+    // expanded panel while the tab is hidden is both, and gets the retract
+    // timing -- the longer distance is also the one worth watching.
+    NSTimeInterval duration = kCollapseSeconds;
+    CAMediaTimingFunction *curve = hoverCurve();
+    if (m_impl->expanded) {
+        duration = kExpandSeconds;
+    } else if (stripChanged) {
+        duration = showStrip ? kTabRevealSeconds : kTabRetractSeconds;
+        curve = tabCurve();
+    }
+
+    if (stripChanged) {
+        // The strip's own layer moves with the view because present() anchors
+        // it to the bottom edge, so the tab's resize already carries it up into
+        // the housing. The fade is the other half: the picture dims out instead
+        // of being visible one frame and gone the next.
+        fadeStripLayer(m_impl->view.stripLayer, showStrip, animated ? duration : 0.0);
+    } else if (!animated) {
+        // No transition in flight: make the layer agree with the state. This is
+        // also how the strip comes back after the off-screen path above hid it
+        // when the lid shut, which is a jump and gets no fade.
+        m_impl->view.stripLayer.hidden = !showStrip;
+    }
 
     // The window resizes its own content view, and present() places the strip
     // from that view's live bounds every frame, so the strip rides the
@@ -697,8 +788,8 @@ void MacNotchPresenter::applyFrame(bool animated)
     // undo exactly that.
     if (animated) {
         [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
-            context.duration = m_impl->expanded ? kExpandSeconds : kCollapseSeconds;
-            context.timingFunction = hoverCurve();
+            context.duration = duration;
+            context.timingFunction = curve;
             [m_impl->window.animator setFrame:frame display:YES];
         }];
     } else {
